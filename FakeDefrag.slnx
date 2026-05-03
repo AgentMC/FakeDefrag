@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="DefragCore/DefragCore.csproj" />
+  <Project Path="FakeDefragConsole/FakeDefragConsole.csproj" />
+</Solution>
