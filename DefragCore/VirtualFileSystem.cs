@@ -2,7 +2,8 @@
 {
     public class VirtualFileSystem
     {
-        public readonly List<VirtualFile> files = [];
+        private readonly List<VirtualFile> _files = [];
+        public IReadOnlyList<VirtualFile> Files { get { return _files; } }
 
 
         const uint MaxGenerateFiles = 10;
@@ -14,7 +15,7 @@
             for (int i = 0; i < MaxGenerateFiles; i++)
             {
                 var file = new VirtualFile(GetRealPath(), (ulong)Random.Shared.Next(1024, 10 * 1024 * 1024), []);
-                files.Add(file);
+                _files.Add(file);
                 ulong sizeRemaining = file.Size;
                 while(sizeRemaining > 0)
                 {
@@ -44,11 +45,11 @@
                     //let's write!
                     var dataSizeToWrite = realClustersToWrite * ClusterSize;
                     disk.Write(location, dataSizeToWrite); //allocate data on disk
-                    file.DataLocation.Add(new(location, realClustersToWrite)); //add chunk to the reference table
+                    file.ClusterSegmentsLocation.Add(new(location, realClustersToWrite)); //add chunk to the reference table
                     sizeRemaining -= Math.Min(dataSizeToWrite, sizeRemaining);
                 }
             }
-            disk.InitComplete = true;
+            disk.SimulateIoDelay = true;
         }
 
         private static string GetRealPath()
@@ -78,6 +79,30 @@
                 dirInfos = [];
             }
             return dirInfos.Length > 0 ? dirInfos[Random.Shared.Next(dirInfos.Length)] : Path.Combine(path, DateTime.Now.Ticks.ToString("X")[^8..] + ".tmp");
+        }
+
+        public void PioritizeFileAtIdx(int idx)
+        {
+            var vf = _files[idx];
+            _files.RemoveAt(idx); 
+            _files.Insert(0, vf);
+        }
+
+        public (VirtualFile, VirtualUnitSequence) GetFileAndClusterSegmentAt(ulong address)
+        {
+            for (int i = 0; i < _files.Count; i++)
+            {
+                var f = _files[i];
+                for (int j = 0; j < f.ClusterSegmentsLocation.Count; j++)
+                {
+                    var d = f.ClusterSegmentsLocation[j];
+                    if (d.Address == address)
+                    {
+                        return (f, d);
+                    }
+                }
+            }
+            throw new Exception($"Unable to locate the file segment at address {address}");
         }
     }
 }

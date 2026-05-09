@@ -14,17 +14,24 @@
             Empty, Data, Locked, Bad
         }
 
-        private readonly Dictionary<ulong, SectorState> DiskView = new();
+        private readonly Dictionary<ulong, SectorState> DiskView;
+
         public readonly ulong SizeBytes;
 
         public ulong SpaceAllocated => (ulong)(SectorLength * DiskView.Count);
         public ulong SpaceAvailable => SizeBytes - SpaceAllocated;
 
-        public bool InitComplete { get; set; } = false;
+        public bool SimulateIoDelay { get; set; } 
 
-        public VirtualHardDisk(ulong sizeBytes)
+        internal VirtualHardDisk(Dictionary<ulong, SectorState> diskView, ulong sizeBytes, bool simlulateIoDelay)
         {
+            DiskView = diskView;
             SizeBytes = sizeBytes;
+            SimulateIoDelay = simlulateIoDelay;
+        }
+
+        public VirtualHardDisk(ulong sizeBytes) : this([], sizeBytes, false)
+        {
             for (ulong i = 0; i < (BootLoaderSize / SectorLength); i++)
             {
                 DiskView[i] = SectorState.Locked;
@@ -46,23 +53,23 @@
         /// <summary>
         /// Attempts to find and return a data-free and usable (not Bad or Locked) location in memory defined by the request.
         /// </summary>
-        /// <param name="request">The request defines the minimum address and the required space (in VHD Segments).</param>
+        /// <param name="freeSectorRequest">The request defines the minimum address and the required space (in VHD Segments).</param>
         /// <returns>If the search according to the parameters is successful, returns the pointer to the memory location and identified free space.
         /// Returns null otherwise.</returns>
-        public VirtualClusterSequence? FindNextFreeSpace(VirtualClusterSequence request)
+        public VirtualUnitSequence? FindNextFreeSectorSpace(VirtualUnitSequence freeSectorRequest)
         {
-            var address = request.address;
+            var address = freeSectorRequest.Address;
             ulong? nextFreeAddress;
             while ((nextFreeAddress = FindNextFreeAddress(address)) != null)
             {
                 address = nextFreeAddress.Value;
                 var sector = address / SectorLength;
-                var freeSpace = (uint)MeasureFreeSpaceInSectors(sector);
-                if (freeSpace >= request.numUnits)
+                var freeSpaceInSectors = (uint)MeasureFreeSpaceInSectors(sector);
+                if (freeSpaceInSectors >= freeSectorRequest.NumUnits)
                 {
-                    return new(address, freeSpace);
+                    return new(address, freeSpaceInSectors);
                 }
-                address += (freeSpace + 1) * SectorLength;
+                address += (freeSpaceInSectors + 1) * SectorLength;
             }
             return null;
         }
@@ -103,14 +110,14 @@
         {
             if ((address + length) > SizeBytes) throw new ArgumentOutOfRangeException(nameof(address), "Address must be less or equal than the disk size lest the length.");
             if (address % SectorLength != 0) throw new ArgumentException("Address requested is not sector-aligned", nameof(address));
-            if (InitComplete) Thread.Sleep((int)(length / (SectorLength * 1000) * (isRead ? SectorReadTimeUs : SectorWriteTimeUs)));
+            if (SimulateIoDelay) Thread.Sleep((int)(length / (SectorLength * 1000) * (isRead ? SectorReadTimeUs : SectorWriteTimeUs)));
         }
 
         public void Read(ulong address, ulong length)
         {
             ReadBegin?.Invoke(this, new(address, length));
             CheckConstraints(address, length, true);
-            if(InitComplete) Thread.Sleep((int)(length / (SectorLength * 1000) * SectorReadTimeUs));
+            if(SimulateIoDelay) Thread.Sleep((int)(length / (SectorLength * 1000) * SectorReadTimeUs));
             ReadEnd?.Invoke(this, new(address, length));
         }
 
@@ -143,6 +150,6 @@
             public ulong Length { get; } = length;
         }
 
-        public event EventHandler<DiskOperationEventArgs> ReadBegin, ReadEnd, WriteBegin, WriteEnd;
+        public event EventHandler<DiskOperationEventArgs>? ReadBegin, ReadEnd, WriteBegin, WriteEnd;
     }
 }

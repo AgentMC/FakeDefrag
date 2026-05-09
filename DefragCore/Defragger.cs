@@ -9,33 +9,31 @@
             //1. Decide on first movable sector  - is it a file or a free space.
             //if a file - we'll start with it.
 
-            var defragPtr = disk.FindNextFreeSpace(new(0, 1))!; //1.1 first localte lowest free space block
+            var defragSectorPtr = disk.FindNextFreeSectorSpace(new(0, 1))!; //1.1 first localte lowest free space block
 
             //1.2 now search for the lowest address file
             ulong lowestFilePtr = ulong.MaxValue;
             int lowestFileIndex = -1;
-            for (int i = 0; i < fileSystem.files.Count; i++)
+            for (int i = 0; i < fileSystem.Files.Count; i++)
             {
-                var f = fileSystem.files[i];
-                for (int j = 0; j < f.DataLocation.Count; j++) 
+                var f = fileSystem.Files[i];
+                for (int j = 0; j < f.ClusterSegmentsLocation.Count; j++) 
                 { 
-                    var d = f.DataLocation[j];
-                    if((i==0  && j==0 ) || (d.address < lowestFilePtr))
+                    var d = f.ClusterSegmentsLocation[j];
+                    if((i==0  && j==0 ) || (d.Address < lowestFilePtr))
                     {
-                        lowestFilePtr = d.address;
+                        lowestFilePtr = d.Address;
                         lowestFileIndex = i;
                     }
                 }
             }
 
             //1.3 if the first thing after the locked zone is a file and not free space, we start with that file at that position
-            if(lowestFilePtr < defragPtr.address)
+            if(lowestFilePtr < defragSectorPtr.Address)
             {
-                defragPtr.address = lowestFilePtr;
-                defragPtr.numUnits = 0;
-                var vf = fileSystem.files[lowestFileIndex];
-                fileSystem.files.RemoveAt(lowestFileIndex); //just move it to the top of the list to start with it
-                fileSystem.files.Insert(0, vf);
+                defragSectorPtr.Address = lowestFilePtr;
+                defragSectorPtr.NumUnits = 0;
+                fileSystem.PioritizeFileAtIdx(lowestFileIndex); //just move it to the top of the list to start with it
             }
 
             //2. for each file i
@@ -65,24 +63,25 @@
 
             //2
             ulong totalProcessed = 0;
-            for (int i = 0; i < fileSystem.files.Count; i++)
+            for (int i = 0; i < fileSystem.Files.Count; i++)
             {
-                var file = fileSystem.files[i];
+                var file = fileSystem.Files[i];
                 //2.1
-                int hostSegmentIdx = 0;
-                for (int j = 0; j < file.DataLocation.Count; /*manual update*/)
+                int hostSegmentIdx = 0; //The index of the segment we are accumulating the rest into. It grows if the file needs to be broken in 2+ parts.
+                for (int j = 0; j < file.ClusterSegmentsLocation.Count; /*manual update*/)
                 {
                     OnProgress(totalProcessed, file.Name);
                     bool canMove = true; //flag to see if this iteration moved data successfully or newed to jump away
-                    var segment = file.DataLocation[j];
-                    if(segment.address != defragPtr.address)
+                    bool hostSegmentIncreased = false; //flag to track the growth in the minimum count of the file segments
+                    var segmentOfClusters = file.ClusterSegmentsLocation[j];
+                    if(segmentOfClusters.Address != defragSectorPtr.Address)
                     {
                         //2.2
                         OnMessage("Setting up free space...");
-                        var segmentInSectors = segment.numUnits * SectorsPerCluster;
-                        while (defragPtr.numUnits < segmentInSectors)
+                        var segmentInSectors = segmentOfClusters.NumUnits * SectorsPerCluster;
+                        while (defragSectorPtr.NumUnits < segmentInSectors)
                         {
-                            var nextSectorAddress = defragPtr.address + defragPtr.numUnits * VirtualHardDisk.SectorLength;
+                            var nextSectorAddress = defragSectorPtr.Address + defragSectorPtr.NumUnits * VirtualHardDisk.SectorLength;
                             var nextSectorState = disk.PeekAlignSector(ref nextSectorAddress);
                             if(nextSectorState == VirtualHardDisk.SectorState.Locked || nextSectorState == VirtualHardDisk.SectorState.Bad)
                             {
@@ -90,33 +89,33 @@
                             }
                             else if(nextSectorState == VirtualHardDisk.SectorState.Empty)
                             {
-                                defragPtr.numUnits += disk.FindNextFreeSpace(new(nextSectorAddress, 1))!.numUnits;
+                                defragSectorPtr.NumUnits += disk.FindNextFreeSectorSpace(new(nextSectorAddress, 1))!.NumUnits;
                             }
                             else
                             {
-                                (var targetFile, var targetSegment) = GetFileAndSegmentAt(nextSectorAddress);
-                                var targetSegmentInSectors = targetSegment.numUnits * SectorsPerCluster;
-                                var nextFreeSpace = disk.FindNextFreeSpace(new(nextSectorAddress, targetSegmentInSectors)) ?? disk.FindNextFreeSpace(new(nextSectorAddress, SectorsPerCluster)); //at least 1 cluster space should be free for the move
-                                if (nextFreeSpace == null)
+                                (var targetFile, var targetSegment) = fileSystem.GetFileAndClusterSegmentAt(nextSectorAddress);
+                                var targetSegmentInSectors = targetSegment.NumUnits * SectorsPerCluster;
+                                var nextFreeSectorSpace = disk.FindNextFreeSectorSpace(new(nextSectorAddress, targetSegmentInSectors)) ?? disk.FindNextFreeSectorSpace(new(nextSectorAddress, SectorsPerCluster)); //at least 1 cluster space should be free for the move
+                                if (nextFreeSectorSpace == null)
                                 {
                                     break; //no more free space to move, proceed to break the current segment (the one we are trying to move into defragPtr, not the one we are moving away to free space)
                                 }
-                                if(nextFreeSpace.numUnits < targetSegmentInSectors)//next free block does not fit the entire sacrificial segment --> break the segment
+                                if(nextFreeSectorSpace.NumUnits < targetSegmentInSectors)//next free block does not fit the entire sacrificial segment --> break the segment
                                 {
-                                    if (!BreakSegment(targetSegment, targetFile, nextFreeSpace.numUnits))
+                                    if (!targetFile.TryBreakSegment(targetSegment, nextFreeSectorSpace.NumUnits))
                                     { //free block is waaaay too small. We need to move the primary defragPtr out of it. Let's just fallback onto the next iteration.
                                         break;
                                     }
                                 }
-                                MoveData(targetSegment, nextFreeSpace); //moving data out to free space
-                                defragPtr.numUnits += targetSegment.numUnits * SectorsPerCluster;
+                                MoveData(targetSegment, nextFreeSectorSpace); //moving data out to free space
+                                defragSectorPtr.NumUnits += targetSegment.NumUnits * SectorsPerCluster;
                             }
                         }
                         //check if we were able to reach the required length
-                        if (defragPtr.numUnits < segmentInSectors) //still less than needed - have to break the current segment
+                        if (defragSectorPtr.NumUnits < segmentInSectors) //still less than needed - have to break the current segment
                         {
-                            canMove = BreakSegment(segment, file, defragPtr.numUnits);
-                            if(!canMove && defragPtr.address + defragPtr.numUnits* VirtualHardDisk.SectorLength >= disk.SizeBytes - 1)
+                            canMove = file.TryBreakSegment(segmentOfClusters, defragSectorPtr.NumUnits);
+                            if(!canMove && defragSectorPtr.Address + defragSectorPtr.NumUnits* VirtualHardDisk.SectorLength >= disk.SizeBytes - 1)
                             {
                                 throw new InvalidDataException("Fragmentation too rough, unable to move a single solid cluster. Please delete some files.");
                             }
@@ -126,13 +125,14 @@
                         if (canMove)
                         {
                             OnMessage("Moving data...");
-                            MoveData(segment, defragPtr);
+                            MoveData(segmentOfClusters, defragSectorPtr);
                         }
 
                         //2.4
                         if (!canMove)
                         {
                             hostSegmentIdx++; //a blocked piece of physical space in front of us, this file will have >1 segment.
+                            hostSegmentIncreased = true;
                         }
                         else if (j == hostSegmentIdx)
                         {
@@ -140,8 +140,8 @@
                         }
                         else if (j == hostSegmentIdx + 1)
                         {
-                            file.DataLocation[j - 1].numUnits += segment.numUnits;
-                            file.DataLocation.RemoveAt(j);
+                            file.ClusterSegmentsLocation[j - 1].NumUnits += segmentOfClusters.NumUnits;
+                            file.ClusterSegmentsLocation.RemoveAt(j);
                         }
                         else
                         {
@@ -151,64 +151,42 @@
                     //2.5
                     if (canMove)
                     {
-                        var amountMoved = segment.numUnits * VirtualFileSystem.ClusterSize;
+                        var amountMoved = segmentOfClusters.NumUnits * VirtualFileSystem.ClusterSize;
                         totalProcessed += amountMoved;
-                        defragPtr.address += amountMoved;
+                        defragSectorPtr.Address += amountMoved;
                     }
                     else //we did not move data. The current ptr points to an unusable area. Need to jump ahead without skipping segments.
                     {
-                        defragPtr.address += defragPtr.numUnits * VirtualHardDisk.SectorLength;
+                        defragSectorPtr.Address += defragSectorPtr.NumUnits * VirtualHardDisk.SectorLength;
                     }
                     VirtualHardDisk.SectorState newSectorState; 
-                    while((newSectorState = disk.PeekAlignSector(ref defragPtr.address)) > VirtualHardDisk.SectorState.Data)
-                    {
-                        defragPtr.address += VirtualHardDisk.SectorLength;
+                    while((newSectorState = disk.PeekAlignSector(ref defragSectorPtr.Address)) > VirtualHardDisk.SectorState.Data /*while pointing at Locked or Bad sector*/)
+                    {   /*This may theoretically throw if we're at the end of the disk and trying the sequence of locked and bad sectors*/
+                        defragSectorPtr.Address += VirtualHardDisk.SectorLength; //try next sector
+                        if (!hostSegmentIncreased) //we need to do it only once per segment, ignore if this is nth attempt or if !canMove
+                        {
+                            hostSegmentIdx++; //we have successfully written full _n_ clusters of data (canMove:true), but the very next sector is locked, so the file must still be split
+                            hostSegmentIncreased = true; 
+                        }
                     }
-                    defragPtr.numUnits = newSectorState == VirtualHardDisk.SectorState.Data ? 0 : disk.FindNextFreeSpace(new(defragPtr.address, 1))!.numUnits;
+                    defragSectorPtr.NumUnits = newSectorState == VirtualHardDisk.SectorState.Data ? 0 : disk.FindNextFreeSectorSpace(new(defragSectorPtr.Address, 1))!.NumUnits;
+                    //^^this is going to be our next sector to write the data. Size 0 means it's occupied and we have to move the data; othervise n free sectors
                 }
             }
 
             //3
             OnProgress(totalProcessed, "<finished>");
-            OnMessage("Defrag complete!");
+            OnMessage("Defrag complete! Press ENTER to exit.");
         }
 
-        private void MoveData(VirtualClusterSequence sourceClusterSegment, VirtualClusterSequence targetSectorLocation)
+        private void MoveData(VirtualUnitSequence sourceClusterSegment, VirtualUnitSequence targetSectorLocation)
         {
-            var dataSize = sourceClusterSegment.numUnits * VirtualFileSystem.ClusterSize;
-            disk.Read(sourceClusterSegment.address, dataSize);
-            disk.Write(targetSectorLocation.address, dataSize);
-            var oldLocation = sourceClusterSegment.address;
-            sourceClusterSegment.address = targetSectorLocation.address;
+            var dataSize = sourceClusterSegment.NumUnits * VirtualFileSystem.ClusterSize;
+            disk.Read(sourceClusterSegment.Address, dataSize);
+            disk.Write(targetSectorLocation.Address, dataSize);
+            var oldLocation = sourceClusterSegment.Address;
+            sourceClusterSegment.Address = targetSectorLocation.Address;
             disk.Clear(oldLocation, dataSize);
-        }
-
-        private bool BreakSegment(VirtualClusterSequence segmentOfClusters, VirtualFile file, uint availableSectors)
-        {
-            var movableClusters = availableSectors / SectorsPerCluster;//we can only move this many clusters
-            if (movableClusters == 0) return false;  //Unable to move a single solid cluster.
-            var differenceInClusters = segmentOfClusters.numUnits - movableClusters;//actual unmovable difference to break
-            segmentOfClusters.numUnits = movableClusters;              //actually break the segment
-            var segmentIndex = file.DataLocation.IndexOf(segmentOfClusters);
-            file.DataLocation.Insert(segmentIndex + 1, new(segmentOfClusters.address + segmentOfClusters.numUnits * VirtualFileSystem.ClusterSize, differenceInClusters));
-            return true;
-        }
-
-        private (VirtualFile, VirtualClusterSequence) GetFileAndSegmentAt(ulong address)
-        {
-            for (int i = 0; i < fileSystem.files.Count; i++)
-            {
-                var f = fileSystem.files[i];
-                for (int j = 0; j < f.DataLocation.Count; j++)
-                {
-                    var d = f.DataLocation[j];
-                    if (d.address == address)
-                    {
-                        return (f, d);
-                    }
-                }
-            }
-            throw new Exception($"Unable to locate the file segment at address {address}");
         }
 
         public class ProgressEventArgs(ulong bytesCopied, string fileName) : EventArgs
