@@ -14,18 +14,18 @@
             Empty, Data, Locked, Bad
         }
 
-        private readonly Dictionary<ulong, SectorState> DiskView;
+        private readonly Dictionary<ulong, SectorState> _diskView;
 
         public readonly ulong SizeBytes;
 
-        public ulong SpaceAllocated => (ulong)(SectorLength * DiskView.Count);
+        public ulong SpaceAllocated => (ulong)(SectorLength * _diskView.Count);
         public ulong SpaceAvailable => SizeBytes - SpaceAllocated;
 
         public bool SimulateIoDelay { get; set; } 
 
         internal VirtualHardDisk(Dictionary<ulong, SectorState> diskView, ulong sizeBytes, bool simlulateIoDelay)
         {
-            DiskView = diskView;
+            _diskView = diskView;
             SizeBytes = sizeBytes;
             SimulateIoDelay = simlulateIoDelay;
         }
@@ -34,12 +34,12 @@
         {
             for (ulong i = 0; i < (BootLoaderSize / SectorLength); i++)
             {
-                DiskView[i] = SectorState.Locked;
+                _diskView[i] = SectorState.Locked;
             }
             var fatLocation = (ulong)Random.Shared.Next((int)(0.2 * SizeBytes), (int)(0.8 * sizeBytes)) / SectorLength;
             for (var i = fatLocation; i <= (2 * BootLoaderSize / SectorLength) - 1 + fatLocation; i++)
             {
-                DiskView[i] = SectorState.Locked;
+                _diskView[i] = SectorState.Locked;
             }
         }
 
@@ -47,7 +47,7 @@
         {
             if (address >= SizeBytes) throw new ArgumentOutOfRangeException(nameof(address), "Address must be less or equal than the disk size.");
             address -= address % SectorLength;
-            return DiskView.TryGetValue(address / SectorLength, out var state) ? state : SectorState.Empty;
+            return _diskView.TryGetValue(address / SectorLength, out var state) ? state : SectorState.Empty;
         }
 
         /// <summary>
@@ -94,11 +94,11 @@
         private ulong MeasureFreeSpaceInSectors(ulong startingSector)
         {
             ulong maxSector = SizeBytes / SectorLength;
-            foreach (var sectorId in DiskView.Keys)
+            foreach (var sectorId in _diskView.Keys)
             {
                 if (sectorId > startingSector &&
                     sectorId < maxSector &&
-                    DiskView[sectorId] != SectorState.Empty)
+                    _diskView[sectorId] != SectorState.Empty)
                 {
                     maxSector = sectorId;
                 }
@@ -128,7 +128,7 @@
             ulong location = address / SectorLength, writeSectors = (ulong)Math.Ceiling((double)length / SectorLength);
             for (var i = location; i <= writeSectors - 1 + location; i++)
             {
-                if (DiskView.TryGetValue(i, out var state) && (state == SectorState.Locked || state == SectorState.Bad)) throw new InvalidOperationException($"Attempting to write to a sector {i} with invalid state {state}.");
+                if (_diskView.TryGetValue(i, out var state) && (state == SectorState.Locked || state == SectorState.Bad)) throw new InvalidOperationException($"Attempting to write to a sector {i} with invalid state {state}.");
                 action(i);
             }
             WriteEnd?.Invoke(this, new(address, length));
@@ -136,12 +136,12 @@
 
         public void Write(ulong address, ulong length)
         {
-            WriteInternal(address, length, (i) => DiskView[i] = SectorState.Data);
+            WriteInternal(address, length, (i) => _diskView[i] = SectorState.Data);
         }
     
         public void Clear (ulong address, ulong length)
         {
-            WriteInternal(address, length, (i) => DiskView.Remove(i));
+            WriteInternal(address, length, (i) => _diskView.Remove(i));
         }
 
         public class DiskOperationEventArgs(ulong address, ulong length) : EventArgs
