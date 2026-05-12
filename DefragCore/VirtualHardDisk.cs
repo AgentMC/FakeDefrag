@@ -62,14 +62,21 @@
             ulong? nextFreeAddress;
             while ((nextFreeAddress = FindNextFreeAddress(address)) != null)
             {
-                address = nextFreeAddress.Value;
-                var sector = address / SectorLength;
-                var freeSpaceInSectors = (uint)MeasureFreeSpaceInSectors(sector);
-                if (freeSpaceInSectors >= freeSectorRequest.NumUnits)
+                if(nextFreeAddress >= address)
                 {
-                    return new(address, freeSpaceInSectors);
+                    address = nextFreeAddress.Value;
+                    var sector = address / SectorLength;
+                    var freeSpaceInSectors = (uint)MeasureFreeSpaceInSectors(sector);
+                    if (freeSpaceInSectors >= freeSectorRequest.NumUnits)
+                    {
+                        return new(address, freeSpaceInSectors);
+                    }
+                    address += (freeSpaceInSectors + 1) * SectorLength;
                 }
-                address += (freeSpaceInSectors + 1) * SectorLength;
+                else // mid-free sector case
+                {
+                    address = nextFreeAddress.Value + SectorLength;
+                }
             }
             return null;
         }
@@ -94,13 +101,13 @@
         private ulong MeasureFreeSpaceInSectors(ulong startingSector)
         {
             ulong maxSector = SizeBytes / SectorLength;
-            foreach (var sectorId in _diskView.Keys)
+            foreach (var sector in _diskView)
             {
-                if (sectorId > startingSector &&
-                    sectorId < maxSector &&
-                    _diskView[sectorId] != SectorState.Empty)
+                if (sector.Key > startingSector &&
+                    sector.Key < maxSector &&
+                    sector.Value != SectorState.Empty)
                 {
-                    maxSector = sectorId;
+                    maxSector = sector.Key;
                 }
             }
             return maxSector - startingSector;
@@ -108,7 +115,8 @@
 
         private void CheckConstraints(ulong address, ulong length, bool isRead)
         {
-            if ((address + length) > SizeBytes) throw new ArgumentOutOfRangeException(nameof(address), "Address must be less or equal than the disk size lest the length.");
+            if (length == 0) throw new ArgumentException("Length cannot be 0", nameof(length));
+            if (address + length > SizeBytes) throw new ArgumentOutOfRangeException(nameof(address), "Address must be less or equal than the disk size lest the length.");
             if (address % SectorLength != 0) throw new ArgumentException("Address requested is not sector-aligned", nameof(address));
             if (SimulateIoDelay) Thread.Sleep((int)(length / (SectorLength * 1000) * (isRead ? SectorReadTimeUs : SectorWriteTimeUs)));
         }

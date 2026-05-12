@@ -117,6 +117,123 @@ public class VirtualHardDiskTests
 
     //todo:
     //FindNextFreeSectorSpace
+    //  + address > size --> null
+    //  + point at mid-empty sector --> next sector
+    //  + point at mid-empty sector before data sector --> next sector after data sector
+    //  + point at start empty sector --> this sector
+    //  + point at single data sector --> next sector
+    //      + single empty --> 1 length
+    //      + n empty --> n length
+    //      + n last empty --> n length
+    //          + skips free area less than requested
+    //  + point at mid-last sector --> null
+    //  + point at last data sector --> null
+    //  + point at start last empty sector --> this sector, 1 length
+    //  + point at start n-last empty sector --> this sector, n length
+    [TestMethod]
+    public void FindNextFreeSectorSpace_ReturnsNullIfPointerOurOfRange()
+    {
+        var sut = new VirtualHardDisk([], 1024, false);
+        Assert.IsNull(sut.FindNextFreeSectorSpace(new(1024, 0)));
+        Assert.IsNull(sut.FindNextFreeSectorSpace(new(1025, 0)));
+        Assert.IsNull(sut.FindNextFreeSectorSpace(new(1024 + SectorLength, 0)));
+    }
+
+    [TestMethod]
+    public void FindNextFreeSectorSpace_SkipsForwardOnMidEmptySector()
+    {
+        var sut = new VirtualHardDisk([], 1024, false);
+        var result = sut.FindNextFreeSectorSpace(new(SectorLength / 2, 1));
+        Assert.AreEqual(SectorLength, result.Address);
+        Assert.AreEqual(1024 / SectorLength - 1, result.NumUnits);
+    }
+
+    [TestMethod]
+    public void FindNextFreeSectorSpace_SkipsForwardOnMidEmptySectorAndData()
+    {
+        var sut = new VirtualHardDisk(new() { { 1, SectorState.Data } }, 1024, false);
+        var result = sut.FindNextFreeSectorSpace(new(SectorLength / 2, 1));
+        Assert.AreEqual(SectorLength * 2, result.Address);
+        Assert.AreEqual(1024 / SectorLength - 2, result.NumUnits);
+    }
+
+    [TestMethod]
+    public void FindNextFreeSectorSpace_AtStartEmptySectorReturnsThisSector()
+    {
+        var sut = new VirtualHardDisk([], 1024, false);
+        var result = sut.FindNextFreeSectorSpace(new(0, 1));
+        Assert.AreEqual(0u, result.Address);
+        Assert.AreEqual(1024 / SectorLength, result.NumUnits);
+    }
+
+    [TestMethod]
+    public void FindNextFreeSectorSpace_AtStartDataSectorReturnsNextSector()
+    {
+        var sut = new VirtualHardDisk(new() { { 0, SectorState.Data } }, 1024, false);
+        var result = sut.FindNextFreeSectorSpace(new(0, 1));
+        Assert.AreEqual(SectorLength, result.Address);
+        Assert.AreEqual(1024 / SectorLength - 1, result.NumUnits);
+    }
+
+    [TestMethod]
+    public void FindNextFreeSectorSpace_AtStartDataSectorReturnsNextSectorSingular()
+    {
+        var sut = new VirtualHardDisk(new() { { 0, SectorState.Locked }, {2, SectorState.Bad } }, 1024, false);
+        var result = sut.FindNextFreeSectorSpace(new(0, 1));
+        Assert.AreEqual(SectorLength, result.Address);
+        Assert.AreEqual(1u, result.NumUnits);
+    }
+
+    [TestMethod]
+    public void FindNextFreeSectorSpace_AtStartDataSectorReturnsNextSectorMulti()
+    {
+        var sut = new VirtualHardDisk(new() { { 1, SectorState.Locked }, {5, SectorState.Bad } }, 1024, false);
+        var result = sut.FindNextFreeSectorSpace(new(SectorLength, 1));
+        Assert.AreEqual(SectorLength * 2, result.Address);
+        Assert.AreEqual(3u, result.NumUnits);
+    }
+
+    [TestMethod]
+    public void FindNextFreeSectorSpace_AtStartDataSectorReturnsNextSectorMultiAsRequired()
+    {
+        var sut = new VirtualHardDisk(new() { { 1, SectorState.Locked }, {3, SectorState.Bad } }, 1024, false);
+        var result = sut.FindNextFreeSectorSpace(new(SectorLength, 4));
+        Assert.AreEqual(SectorLength * 4, result.Address);
+        Assert.AreEqual(4u, result.NumUnits);
+    }
+
+    [TestMethod]
+    public void FindNextFreeSectorSpace_AtMidLastSectorReturnsNull()
+    {
+        var sut = new VirtualHardDisk([], 1024, false);
+        Assert.IsNull(sut.FindNextFreeSectorSpace(new((ulong)(SectorLength * 7.5), 1)));
+    }
+
+    [TestMethod]
+    public void FindNextFreeSectorSpace_AtStartLastDataSectorReturnsNull()
+    {
+        var sut = new VirtualHardDisk(new() { { 7, SectorState.Data } }, 1024, false);
+        Assert.IsNull(sut.FindNextFreeSectorSpace(new(SectorLength * 7, 1)));
+    }
+
+    [TestMethod]
+    public void FindNextFreeSectorSpace_AtStartLastSectorReturnsOneSector()
+    {
+        var sut = new VirtualHardDisk([], 1024, false);
+        var result = sut.FindNextFreeSectorSpace(new(SectorLength * 7, 1));
+        Assert.AreEqual(SectorLength * 7, result.Address);
+        Assert.AreEqual(1u, result.NumUnits);
+    }
+
+    [TestMethod]
+    public void FindNextFreeSectorSpace_AtStartLastNthSectorReturnsNSectors()
+    {
+        var sut = new VirtualHardDisk([], 1024, false);
+        var result = sut.FindNextFreeSectorSpace(new(SectorLength * 6, 1));
+        Assert.AreEqual(SectorLength * 6, result.Address);
+        Assert.AreEqual(2u, result.NumUnits);
+    }
+
     //Read
     //Write
     //Clear

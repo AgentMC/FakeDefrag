@@ -42,11 +42,14 @@
                         if (targetAddress >= disk.SizeBytes || disk.PeekAlignSector(ref targetAddress) != VirtualHardDisk.SectorState.Empty) break;
                         if ((j + 1) % SectorsPerCluster == 0) realClustersToWrite++;
                     }
-                    //let's write!
-                    var dataSizeToWrite = realClustersToWrite * ClusterSize;
-                    disk.Write(location, dataSizeToWrite); //allocate data on disk
-                    file.ClusterSegmentsLocation.Add(new(location, realClustersToWrite)); //add chunk to the reference table
-                    sizeRemaining -= Math.Min(dataSizeToWrite, sizeRemaining);
+                    if(realClustersToWrite > 0)
+                    {
+                        //let's write!
+                        var dataSizeToWrite = realClustersToWrite * ClusterSize;
+                        disk.Write(location, dataSizeToWrite); //allocate data on disk
+                        file.ClusterSegmentsLocation.Add(new(location, realClustersToWrite)); //add chunk to the reference table
+                        sizeRemaining -= Math.Min(dataSizeToWrite, sizeRemaining);
+                    }
                 }
             }
             disk.SimulateIoDelay = true;
