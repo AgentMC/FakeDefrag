@@ -113,7 +113,7 @@
             return maxSector - startingSector;
         }
 
-        private void CheckConstraints(ulong address, ulong length, bool isRead)
+        private void CheckConstraintsAndDoDelay(ulong address, ulong length, bool isRead)
         {
             if (length == 0) throw new ArgumentException("Length cannot be 0", nameof(length));
             if (address + length > SizeBytes) throw new ArgumentOutOfRangeException(nameof(address), "Address must be less or equal than the disk size lest the length.");
@@ -123,23 +123,24 @@
 
         public void Read(ulong address, ulong length)
         {
-            ReadBegin?.Invoke(this, new(address, length));
-            CheckConstraints(address, length, true);
-            if(SimulateIoDelay) Thread.Sleep((int)(length / (SectorLength * 1000) * SectorReadTimeUs));
-            ReadEnd?.Invoke(this, new(address, length));
+            DiskOperationEventArgs e = new(address, length);
+            ReadBegin?.Invoke(this, e);
+            CheckConstraintsAndDoDelay(address, length, true);
+            ReadEnd?.Invoke(this, e);
         }
 
         private void WriteInternal(ulong address, ulong length, Action<ulong> action)
         {
-            WriteBegin?.Invoke(this, new(address, length));
-            CheckConstraints(address, length, false);
-            ulong location = address / SectorLength, writeSectors = (ulong)Math.Ceiling((double)length / SectorLength);
-            for (var i = location; i <= writeSectors - 1 + location; i++)
+            DiskOperationEventArgs e = new(address, length);
+            WriteBegin?.Invoke(this, e);
+            CheckConstraintsAndDoDelay(address, length, false);
+            ulong startSector = address / SectorLength, writeSectors = (ulong)Math.Ceiling((double)length / SectorLength);
+            for (var i = startSector; i <= startSector + writeSectors - 1; i++)
             {
                 if (_diskView.TryGetValue(i, out var state) && (state == SectorState.Locked || state == SectorState.Bad)) throw new InvalidOperationException($"Attempting to write to a sector {i} with invalid state {state}.");
                 action(i);
             }
-            WriteEnd?.Invoke(this, new(address, length));
+            WriteEnd?.Invoke(this, e);
         }
 
         public void Write(ulong address, ulong length)
